@@ -1,0 +1,880 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Blood Inventory (Tabs + Global Filters + Live Clock)</title>
+
+  <!-- Bootstrap CSS & Bundle (includes JS) -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- docx library (UMD build) -->
+  <script src="https://unpkg.com/docx@8.4.0/build/index.umd.js"></script>
+
+  <style>
+    /* small UI polish */
+    body {
+      background: #f8f9fa;
+    }
+
+    .statusSelect {
+      font-size: 0.75rem;
+      min-width: 110px;
+    }
+
+    .small-select {
+      font-size: 0.8rem;
+    }
+
+    .near-expiry {
+      background-color: #fff3cd !important;
+    }
+
+    /* warning */
+    .already-expired {
+      background-color: #f8d7da !important;
+    }
+
+    /* danger */
+
+    /* floating panel (global) */
+    #floatingFilters {
+      position: fixed;
+      right: 18px;
+      top: 90px;
+      width: 280px;
+      background: white;
+      border: 1px solid #ddd;
+      padding: 12px;
+      border-radius: 8px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+      z-index: 9999;
+      transition: all 0.2s ease-in-out;
+    }
+
+    #floatingFilters.hidden {
+      opacity: 0;
+      transform: translateY(-8px);
+      pointer-events: none;
+    }
+
+    #floatingFilters .form-control,
+    #floatingFilters .btn {
+      font-size: 0.85rem;
+    }
+
+    /* top bar layout */
+    .top-controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    #liveClock {
+      font-weight: 600;
+    }
+
+    /* small screen adaptation */
+    @media (max-width: 900px) {
+      #floatingFilters {
+        position: static;
+        width: auto;
+        margin: 12px 0;
+      }
+
+      .top-controls {
+        justify-content: space-between;
+      }
+    }
+
+    /* tidy table cells for date display */
+    .col-collected,
+    .col-expiry {
+      white-space: nowrap;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container py-4">
+
+    <div class="d-flex align-items-start mb-3">
+      <div class="me-auto">
+        <h1 class="h3 mb-0">Blood Bag Inventory</h1>
+        <small class="text-muted">Manage units • Live updates</small>
+      </div>
+
+      <!-- top-right: clock + filter toggle -->
+      <div class="top-controls">
+        <div id="liveClock" class="text-end me-2" aria-live="polite">--:--:--</div>
+        <button id="toggleFiltersBtn" class="btn btn-sm btn-outline-secondary">Filters</button>
+      </div>
+    </div>
+
+    <!-- NAV PILL TABS -->
+    <ul class="nav nav-pills mb-3" id="inventoryTabs" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-add" data-bs-toggle="pill" data-bs-target="#pane-add" type="button"
+          role="tab">Add Blood Bag</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-inv" data-bs-toggle="pill" data-bs-target="#pane-inventory" type="button"
+          role="tab">Inventory</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-exp" data-bs-toggle="pill" data-bs-target="#pane-expired" type="button"
+          role="tab">Expired</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-trans" data-bs-toggle="pill" data-bs-target="#pane-transfused" type="button"
+          role="tab">Transfused</button>
+      </li>
+    </ul>
+
+    <!-- GLOBAL FILTER PANEL (floating) -->
+    <div id="floatingFilters" aria-hidden="false">
+      <h6 class="mb-2">Search & Filters</h6>
+      <input id="qSearch" class="form-control mb-2" placeholder="Search serial / blood / patient..." />
+      <select id="fBlood" class="form-control mb-2">
+        <option value="">All blood types</option>
+        <option>O+</option>
+        <option>O-</option>
+        <option>A+</option>
+        <option>A-</option>
+        <option>B+</option>
+        <option>B-</option>
+        <option>AB+</option>
+        <option>AB-</option>
+      </select>
+      <select id="fComponent" class="form-control mb-2">
+        <option value="">All components</option>
+        <option>Whole Blood</option>
+        <option>PRBC</option>
+        <option>Platelets</option>
+        <option>FFP</option>
+      </select>
+      <select id="fStatus" class="form-control mb-2">
+        <option value="">All status</option>
+        <option>Available</option>
+        <option>Crossmatched</option>
+        <option>Expired</option>
+        <option>Transfused</option>
+      </select>
+      <div class="d-grid gap-2">
+        <button id="btnClearFilters" class="btn btn-sm btn-outline-secondary">Clear Filters</button>
+      </div>
+    </div>
+
+    <!-- TAB CONTENT -->
+    <div class="tab-content">
+
+      <!-- ADD TAB -->
+      <div class="tab-pane fade show active" id="pane-add" role="tabpanel">
+        <div class="card p-3 mb-4">
+          <h5 class="card-title">Add Blood Bag</h5>
+          <form id="bloodForm">
+            <div class="row g-2 mb-3">
+              <div class="col-md"><label class="form-label">Serial Number</label><input type="text" class="form-control"
+                  id="serial" required></div>
+              <div class="col-md"><label class="form-label">Segment Number</label><input type="text"
+                  class="form-control" id="segment" required></div>
+              <div class="col-md"><label class="form-label">Source</label><input type="text" class="form-control"
+                  id="source"></div>
+            </div>
+
+            <div class="row g-2 mb-3">
+              <div class="col-md"><label class="form-label">Blood Type</label>
+                <select id="bloodType" class="form-select" required>
+                  <option value="">Select</option>
+                  <option>O+</option>
+                  <option>O-</option>
+                  <option>A+</option>
+                  <option>A-</option>
+                  <option>B+</option>
+                  <option>B-</option>
+                  <option>AB+</option>
+                  <option>AB-</option>
+                </select>
+              </div>
+
+              <div class="col-md"><label class="form-label">Component</label>
+                <select id="component" class="form-select" required>
+                  <option value="">Select</option>
+                  <option>Whole Blood</option>
+                  <option>PRBC</option>
+                  <option>Platelets</option>
+                  <option>FFP</option>
+                </select>
+              </div>
+
+              <div class="col-md"><label class="form-label">Volume (mL)</label><input type="number" class="form-control"
+                  id="volume" required></div>
+
+              <div class="col-md"><label class="form-label">Collection Date</label><input type="date"
+                  class="form-control" id="collected" required></div>
+            </div>
+
+            <div class="row g-2 mb-3">
+              <div class="col-md">
+                <label class="form-label">Expiry Date</label>
+                <input type="date" class="form-control" id="expiry" readonly>
+                <div class="form-text"><small>FFP auto-sets 7 years but remains editable</small></div>
+              </div>
+
+              <div class="col-md">
+                <label class="form-label">Status</label>
+                <select id="status" class="form-select statusSelect">
+                  <option>Available</option>
+                  <option>Crossmatched</option>
+                  <option>Expired</option>
+                  <option>Transfused</option>
+                </select>
+              </div>
+
+              <div class="col-md"><label class="form-label">Patient Name</label><input type="text" class="form-control"
+                  id="patient"></div>
+            </div>
+
+            <div class="d-flex gap-2">
+              <button type="submit" class="btn btn-primary">Add Blood Bag</button>
+              <button type="reset" class="btn btn-outline-secondary">Reset</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- INVENTORY TAB -->
+      <div class="tab-pane fade" id="pane-inventory" role="tabpanel">
+        <div class="card p-3 mb-4">
+          <h5 class="card-title">
+            Inventory
+            <button id="dailyReportBtn" class="btn btn-sm btn-outline-primary float-end">Daily Report</button>
+          </h5>
+          <div class="table-responsive">
+            <table class="table table-bordered table-sm" id="inventoryTable">
+              <thead class="table-dark">
+                <tr>
+                  <th>Serial</th>
+                  <th>Segment</th>
+                  <th>Source</th>
+                  <th>Blood Type</th>
+                  <th>Component</th>
+                  <th>Volume</th>
+                  <th>Collection</th>
+                  <th>Expiry</th>
+                  <th>Days Old</th>
+                  <th>Status</th>
+                  <th>Patient</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- EXPIRED TAB -->
+      <div class="tab-pane fade" id="pane-expired" role="tabpanel">
+        <div class="card p-3 mb-4">
+          <h5 class="card-title">Expired Units</h5>
+          <div class="table-responsive">
+            <table class="table table-bordered table-sm" id="expiredTable">
+              <thead class="table-secondary">
+                <tr>
+                  <th>Serial</th>
+                  <th>Segment</th>
+                  <th>Source</th>
+                  <th>Blood Type</th>
+                  <th>Component</th>
+                  <th>Volume</th>
+                  <th>Collection</th>
+                  <th>Expiry</th>
+                  <th>Days Old</th>
+                  <th>Status</th>
+                  <th>Patient</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TRANSFUSED TAB -->
+      <div class="tab-pane fade" id="pane-transfused" role="tabpanel">
+        <div class="card p-3 mb-4">
+          <h5 class="card-title">Transfused Units</h5>
+          <div class="table-responsive">
+            <table class="table table-bordered table-sm" id="transfusedTable">
+              <thead class="table-info">
+                <tr>
+                  <th>Serial</th>
+                  <th>Segment</th>
+                  <th>Source</th>
+                  <th>Blood Type</th>
+                  <th>Component</th>
+                  <th>Volume</th>
+                  <th>Collection</th>
+                  <th>Expiry</th>
+                  <th>Days Old</th>
+                  <th>Status</th>
+                  <th>Patient</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div> <!-- end tab-content -->
+  </div> <!-- end container -->
+
+  <!-- Bootstrap Bundle (JS + Popper) -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script>
+    /* ------------------------- HELPERS ------------------------- */
+    function formatDisplayDate(dateStr) {
+      if (!dateStr) return '';
+      const d = new Date(dateStr);
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    }
+    function formatISO(dateStr) {
+      if (!dateStr) return '';
+      const d = new Date(dateStr);
+      return d.toISOString().split("T")[0];
+    }
+    function daysDifference(fromDate, toDate) {
+      const ms = 1000 * 60 * 60 * 24;
+      return Math.floor((toDate - fromDate) / ms);
+    }
+
+    /* ------------------------- EXPIRY / AGE LOGIC ------------------------- */
+    function calculateExpiry(component, collected) {
+      if (!collected) return '';
+      const base = new Date(collected);
+      const exp = new Date(base);
+      if (component === "Whole Blood" || component === "PRBC") exp.setDate(base.getDate() + 35);
+      else if (component === "Platelets") exp.setDate(base.getDate() + 5);
+      else if (component === "FFP") exp.setFullYear(base.getFullYear() + 7);
+      return formatISO(exp);
+    }
+    function computeAgeText(collected, component) {
+      if (!collected) return '';
+      const col = new Date(collected);
+      const now = new Date();
+      const diffDays = daysDifference(col, now);
+      if (component === "FFP") {
+        const y = Math.floor(diffDays / 365);
+        const d = diffDays % 365;
+        return `${y}y ${d}d`;
+      }
+      return `${diffDays}d`;
+    }
+
+    /* ------------------------- FORM AUTO-EXPIRY ------------------------- */
+    const expiryInput = document.getElementById("expiry");
+    const componentInput = document.getElementById("component");
+    const collectedInput = document.getElementById("collected");
+
+    function updateExpiry() {
+      const comp = componentInput.value;
+      const col = collectedInput.value;
+      if (!col) {
+        expiryInput.value = "";
+        expiryInput.readOnly = true;
+        return;
+      }
+      if (comp === "FFP") {
+        expiryInput.value = calculateExpiry("FFP", col);
+        expiryInput.readOnly = false; // editable override
+      } else {
+        expiryInput.value = calculateExpiry(comp, col);
+        expiryInput.readOnly = true;
+      }
+    }
+    componentInput.addEventListener("change", updateExpiry);
+    collectedInput.addEventListener("change", updateExpiry);
+
+    /* ------------------------- ROW CREATION & LIFECYCLE ------------------------- */
+    function createRow(data) {
+      const row = document.createElement("tr");
+      row.innerHTML = `
+    <td class="col-serial">${data.serial}</td>
+    <td class="col-seg">${data.segment}</td>
+    <td class="col-source">${data.source}</td>
+    <td class="col-blood">${data.blood}</td>
+    <td class="col-component">${data.component}</td>
+    <td class="col-volume">${data.volume}</td>
+    <td class="col-collected" data-collected="${data.collected}">${formatDisplayDate(data.collected)}</td>
+    <td class="col-expiry" data-expiry="${data.expiry}"><input type="date" class="form-control form-control-sm expiryInput" value="${data.expiry}"></td>
+    <td class="col-age" data-col="${data.collected}" data-comp="${data.component}">${data.age}</td>
+    <td><select class="form-select form-select-sm statusSelect small-select">
+      <option ${data.status === "Available" ? "selected" : ""}>Available</option>
+      <option ${data.status === "Crossmatched" ? "selected" : ""}>Crossmatched</option>
+      <option ${data.status === "Expired" ? "selected" : ""}>Expired</option>
+      <option ${data.status === "Transfused" ? "selected" : ""}>Transfused</option>
+    </select></td>
+    <td><input class="form-control form-control-sm patientInput" value="${data.patient}"></td>
+    <td class="actions"></td>
+  `;
+      const expiryCell = row.querySelector('.col-expiry');
+      expiryCell.dataset.expiry = data.expiry || '';
+      attachRowEvents(row);
+      applyRowColor(row);
+      updateRowDaysOld(row); // immediate days old compute
+      return row;
+    }
+
+    function confirmDelete(row) {
+      if (confirm("Delete this blood bag?")) row.remove();
+    }
+
+    function applyRowColor(row) {
+      row.classList.remove('near-expiry', 'already-expired');
+      const expRaw = row.querySelector('.col-expiry').dataset.expiry;
+      if (!expRaw) return;
+      const expDate = new Date(expRaw);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const daysLeft = Math.ceil((expDate - today) / (1000 * 60 * 60 * 24));
+      if (daysLeft < 0) {
+        row.classList.add('already-expired');
+      } else if (daysLeft <= 3) {
+        row.classList.add('near-expiry');
+      }
+    }
+
+    function updateRowDaysOld(row) {
+      const collectedRaw = row.querySelector('.col-collected').dataset.collected;
+      const comp = row.querySelector('.col-component').textContent;
+      const ageCell = row.querySelector('.col-age');
+      if (!collectedRaw) { ageCell.textContent = ''; return; }
+      ageCell.textContent = computeAgeText(collectedRaw, comp);
+    }
+
+    function moveIfExpired(row) {
+      const expRaw = row.querySelector('.col-expiry').dataset.expiry || '';
+      if (!expRaw) return;
+      const expDate = new Date(expRaw);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      if (expDate < today) {
+        const parentId = row.parentElement && row.parentElement.id;
+        if (parentId !== 'expiredTable') {
+          row.querySelector('.statusSelect').value = 'Expired';
+          row.querySelector('.statusSelect').disabled = true;
+          document.querySelector('#expiredTable tbody').appendChild(row);
+          updateActionButtons(row, false);
+        }
+      }
+    }
+
+    function updateActionButtons(row, isInventory) {
+      const cell = row.querySelector('.actions');
+      cell.innerHTML = '';
+      const del = document.createElement('button');
+      del.className = 'btn btn-danger btn-sm me-1';
+      del.textContent = 'Delete';
+      del.onclick = () => confirmDelete(row);
+      cell.appendChild(del);
+
+      if (isInventory) {
+        const edit = document.createElement('button');
+        edit.className = 'btn btn-secondary btn-sm me-1';
+        edit.textContent = 'Edit';
+        edit.onclick = () => {
+          const c = row.children;
+          document.getElementById('serial').value = c[0].textContent;
+          document.getElementById('segment').value = c[1].textContent;
+          document.getElementById('source').value = c[2].textContent;
+          document.getElementById('bloodType').value = c[3].textContent;
+          document.getElementById('component').value = c[4].textContent;
+          document.getElementById('volume').value = c[5].textContent;
+          document.getElementById('collected').value = row.querySelector('.col-collected').dataset.collected || '';
+          document.getElementById('expiry').value = row.querySelector('.col-expiry').dataset.expiry || '';
+          document.getElementById('status').value = row.querySelector('.statusSelect').value;
+          document.getElementById('patient').value = row.querySelector('.patientInput').value;
+          updateExpiry();
+          row.remove();
+        };
+        cell.appendChild(edit);
+      } else {
+        const undo = document.createElement('button');
+        undo.className = 'btn btn-warning btn-sm';
+        undo.textContent = 'Undo';
+        undo.onclick = () => {
+          document.querySelector('#inventoryTable tbody').appendChild(row);
+          row.querySelector('.statusSelect').disabled = false;
+          updateActionButtons(row, true);
+          applyRowColor(row);
+          applyFilters();
+        };
+        cell.appendChild(undo);
+      }
+    }
+
+    function attachRowEvents(row) {
+      const statusSelect = row.querySelector('.statusSelect');
+      const expInput = row.querySelector('.expiryInput');
+
+      const isInventory = row.parentElement && row.parentElement.id === 'inventoryTable';
+      updateActionButtons(row, isInventory);
+
+      statusSelect.onchange = () => {
+        const val = statusSelect.value;
+        if (val === 'Expired') {
+          document.querySelector('#expiredTable tbody').appendChild(row);
+          statusSelect.disabled = true;
+          updateActionButtons(row, false);
+        } else if (val === 'Transfused') {
+          document.querySelector('#transfusedTable tbody').appendChild(row);
+          statusSelect.disabled = true;
+          updateActionButtons(row, false);
+        } else {
+          document.querySelector('#inventoryTable tbody').appendChild(row);
+          statusSelect.disabled = false;
+          updateActionButtons(row, true);
+        }
+        applyRowColor(row);
+        applyFilters();
+      };
+
+      if (expInput) {
+        expInput.onchange = () => {
+          const raw = expInput.value || '';
+          row.querySelector('.col-expiry').dataset.expiry = raw;
+          applyRowColor(row);
+          checkAllRows(); // immediate check
+        };
+      }
+    }
+
+    /* ------------------------- FILTERS ------------------------- */
+    const qSearch = document.getElementById('qSearch');
+    const fBlood = document.getElementById('fBlood');
+    const fComponent = document.getElementById('fComponent');
+    const fStatus = document.getElementById('fStatus');
+    const btnClearFilters = document.getElementById('btnClearFilters');
+
+    function matchesFilter(row) {
+      const q = qSearch.value.trim().toLowerCase();
+      const bloodFilter = fBlood.value;
+      const compFilter = fComponent.value;
+      const statusFilter = fStatus.value;
+
+      const serial = row.querySelector('.col-serial').textContent.toLowerCase();
+      const blood = row.querySelector('.col-blood').textContent;
+      const comp = row.querySelector('.col-component').textContent;
+      const patient = row.querySelector('.patientInput').value.toLowerCase();
+      const status = row.querySelector('.statusSelect').value;
+
+      if (q) {
+        const found = serial.includes(q) || blood.toLowerCase().includes(q) || patient.includes(q);
+        if (!found) return false;
+      }
+      if (bloodFilter && blood !== bloodFilter) return false;
+      if (compFilter && comp !== compFilter) return false;
+      if (statusFilter && status !== statusFilter) return false;
+      return true;
+    }
+
+    function applyFilters() {
+      const tbody = document.querySelector('#inventoryTable tbody');
+      if (!tbody) return;
+      Array.from(tbody.children).forEach(row => {
+        row.style.display = matchesFilter(row) ? '' : 'none';
+      });
+    }
+    [qSearch, fBlood, fComponent, fStatus].forEach(el => {
+      el.addEventListener('input', applyFilters);
+      el.addEventListener('change', applyFilters);
+    });
+    btnClearFilters.onclick = () => {
+      qSearch.value = ''; fBlood.value = ''; fComponent.value = ''; fStatus.value = '';
+      applyFilters();
+    };
+
+    // toggle floating filters
+    const toggleBtn = document.getElementById('toggleFiltersBtn');
+    const floatingPanel = document.getElementById('floatingFilters');
+    toggleBtn.addEventListener('click', () => floatingPanel.classList.toggle('hidden'));
+
+    /* ------------------------- FORM SUBMIT ------------------------- */
+    document.getElementById('bloodForm').addEventListener('submit', e => {
+      e.preventDefault();
+      const serial = document.getElementById('serial').value;
+      const segment = document.getElementById('segment').value;
+      const source = document.getElementById('source').value;
+      const blood = document.getElementById('bloodType').value;
+      const component = document.getElementById('component').value;
+      const volume = document.getElementById('volume').value;
+      const collected = document.getElementById('collected').value;
+      const expiry = document.getElementById('expiry').value;
+      const status = document.getElementById('status').value;
+      const patient = document.getElementById('patient').value;
+      const age = computeAgeText(collected, component);
+
+      const row = createRow({ serial, segment, source, blood, component, volume, collected, expiry, age, status, patient });
+      document.querySelector('#inventoryTable tbody').appendChild(row);
+
+      document.getElementById('bloodForm').reset();
+      expiryInput.value = '';
+      applyRowColor(row);
+      applyFilters();
+    });
+
+    /* ------------------------- LIVE CLOCK ------------------------- */
+    const clockEl = document.getElementById('liveClock');
+    function updateClock() {
+      const now = new Date();
+
+      // Time
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const ss = String(now.getSeconds()).padStart(2, '0');
+
+      // Date (e.g., Nov 22, 2025)
+      const dateStr = now.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric"
+      });
+
+      // Final display
+      clockEl.textContent = `${dateStr} — ${hh}:${mm}:${ss}`;
+    }
+
+    updateClock();
+    setInterval(updateClock, 1000);
+
+    /* ------------------------- GLOBAL CHECK & LIVE UPDATES (1s) ------------------------- */
+    function updateAllDaysAndColors() {
+      ['inventoryTable', 'expiredTable', 'transfusedTable'].forEach(tid => {
+        const tbody = document.querySelector(`#${tid} tbody`);
+        if (!tbody) return;
+        Array.from(tbody.children).forEach(row => {
+          const expInput = row.querySelector('.expiryInput');
+          if (expInput) row.querySelector('.col-expiry').dataset.expiry = expInput.value || '';
+          updateRowDaysOld(row);
+          applyRowColor(row);
+          moveIfExpired(row);
+        });
+      });
+      applyFilters();
+    }
+    function checkAllRows() { updateAllDaysAndColors(); }
+    checkAllRows();
+    setInterval(checkAllRows, 1000);
+
+    /* ------------------------- initial demo data (optional) ------------------------- */
+    (function seedDemo() {
+      const nowISO = new Date().toISOString().split('T')[0];
+      const threeDaysAgo = new Date(); threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+      const threeAgoISO = threeDaysAgo.toISOString().split('T')[0];
+      const soonExpiry = new Date(); soonExpiry.setDate(soonExpiry.getDate() + 2);
+      const soonISO = soonExpiry.toISOString().split('T')[0];
+
+      const demo = [
+        { serial: 'S1001', segment: 'A1', source: 'Donor A', blood: 'O+', component: 'PRBC', volume: 300, collected: threeAgoISO, expiry: calculateExpiry('PRBC', threeAgoISO), age: computeAgeText(threeAgoISO, 'PRBC'), status: 'Available', patient: '' },
+        { serial: 'S1002', segment: 'B2', source: 'Donor B', blood: 'A-', component: 'FFP', volume: 200, collected: nowISO, expiry: calculateExpiry('FFP', nowISO), age: computeAgeText(nowISO, 'FFP'), status: 'Available', patient: '' },
+        { serial: 'S1003', segment: 'C3', source: 'Donor C', blood: 'B+', component: 'Platelets', volume: 50, collected: nowISO, expiry: soonISO, age: computeAgeText(nowISO, 'Platelets'), status: 'Crossmatched', patient: 'John Doe' }
+      ];
+      demo.forEach(d => document.querySelector('#inventoryTable tbody').appendChild(createRow(d)));
+    })();
+
+    /* ------------------------- DAILY REPORT (.docx) GENERATOR (using docx) ------------------------- */
+    const { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType } = docx;
+
+    /**
+     * Build the data structure per component -> blood type -> list of units
+     * Uses rows present in #inventoryTable tbody (regardless of filters)
+     */
+    function collectInventoryData() {
+      const tbody = document.querySelector('#inventoryTable tbody');
+      const rows = Array.from(tbody.children);
+      const components = ['Whole Blood', 'PRBC', 'Platelets', 'FFP'];
+      const bloodTypes = ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'];
+
+      // initialize
+      const data = {};
+      components.forEach(c => {
+        data[c] = {};
+        bloodTypes.forEach(b => data[c][b] = []);
+      });
+
+      rows.forEach(r => {
+        // only consider rows that are actually in inventoryTable (they are)
+        const serial = r.querySelector('.col-serial') ? r.querySelector('.col-serial').textContent.trim() : '';
+        const blood = r.querySelector('.col-blood') ? r.querySelector('.col-blood').textContent.trim() : '';
+        const component = r.querySelector('.col-component') ? r.querySelector('.col-component').textContent.trim() : '';
+        const collected = r.querySelector('.col-collected') ? r.querySelector('.col-collected').dataset.collected : '';
+        const expiry = r.querySelector('.col-expiry') ? r.querySelector('.col-expiry').dataset.expiry : '';
+        const patient = r.querySelector('.patientInput') ? r.querySelector('.patientInput').value.trim() : '';
+        // compute display string: for FFP show expiry, otherwise show age in days
+        let ageOrExpiry = '';
+        if (component === 'FFP') {
+          ageOrExpiry = expiry ? formatDisplayDate(expiry) : '';
+        } else {
+          ageOrExpiry = collected ? `${daysDifference(new Date(collected), new Date())}d` : '';
+        }
+        // push if component and blood type valid
+        if (components.includes(component) && bloodTypes.includes(blood)) {
+          data[component][blood].push({
+            serial,
+            ageOrExpiry,
+            patient
+          });
+        }
+        // If there are blood types not in the standard list, include them dynamically under the component
+        // (not implemented here - by spec we keep the 8 columns; rare types not in 8 will be ignored unless you ask)
+      });
+
+      return { data, components, bloodTypes };
+    }
+
+    /**
+     * Create a docx table for a component.
+     * Each column = one blood type (8 columns). Each cell contains a vertical list of units for that blood type.
+     */
+    function buildComponentTable(componentName, componentMap, bloodTypes) {
+      // determine max number of rows (units in the most-populated blood type)
+      const counts = bloodTypes.map(bt => (componentMap[bt] || []).length);
+      const maxRows = Math.max(...counts, 1); // at least 1 so header row + 1 data row exist
+
+      // Header row (blood types)
+      const headerRow = new TableRow({
+        children: bloodTypes.map(bt => new TableCell({
+          children: [new Paragraph({ children: [new TextRun({ text: bt, bold: true })] })],
+          borders: {
+            top: { style: "single", size: 2, color: "000000" },
+            bottom: { style: "single", size: 2, color: "000000" },
+            left: { style: "single", size: 2, color: "000000" },
+            right: { style: "single", size: 2, color: "000000" }
+          },
+        }))
+      });
+
+      const rows = [headerRow];
+
+      // For each data row (i.e. line index inside each column)
+      for (let i = 0; i < maxRows; i++) {
+        const tr = new TableRow({
+          children: bloodTypes.map(bt => {
+            const list = componentMap[bt] || [];
+            const item = list[i];
+            let children = [];
+            if (item) {
+              // First line: Serial — Age or Expiry
+              const line1 = `${item.serial}${item.ageOrExpiry ? ' — ' + item.ageOrExpiry : ''}`;
+              children.push(new Paragraph({ children: [new TextRun({ text: line1 })] }));
+              // Second line if patient allocated
+              if (item.patient) {
+                children.push(new Paragraph({ children: [new TextRun({ text: `Patient: ${item.patient}`, italics: true })] }));
+              } else {
+                // empty paragraph to keep cell height consistent
+                // (optional) children.push(new Paragraph(''));
+              }
+            } else {
+              children.push(new Paragraph('')); // empty cell
+            }
+
+            return new TableCell({
+              children,
+              borders: {
+                top: { style: "single", size: 2, color: "000000" },
+                bottom: { style: "single", size: 2, color: "000000" },
+                left: { style: "single", size: 2, color: "000000" },
+                right: { style: "single", size: 2, color: "000000" }
+              },
+              width: { size: Math.floor(100 / bloodTypes.length), type: WidthType.PERCENTAGE }
+            });
+          })
+        });
+        rows.push(tr);
+      }
+
+      const table = new Table({
+        rows,
+        width: { size: 100, type: WidthType.PERCENTAGE }
+      });
+
+      return table;
+    }
+
+    /**
+     * Build the full document and trigger download
+     */
+    async function generateDocxReport() {
+      const { data, components, bloodTypes } = collectInventoryData();
+
+      // Document title + header
+      const now = new Date();
+      const dateStrISO = now.toISOString().split('T')[0];
+      const dateReadable = now.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: [
+            new Paragraph({ children: [new TextRun({ text: "The Hospital at Maayo", bold: true, size: 28 })] }),
+            new Paragraph({ children: [new TextRun({ text: "BLOOD BANK SECTION", bold: true })] }),
+            new Paragraph({ children: [new TextRun({ text: "DAILY BLOOD INVENTORY FORM", bold: true })] }),
+            new Paragraph({ text: `Date: ${dateReadable}` }),
+            new Paragraph({ text: "" })
+          ]
+        }]
+      });
+
+      // For each component, add heading and its table
+      components.forEach(componentName => {
+        const sectionPara = new Paragraph({ children: [new TextRun({ text: componentName, bold: true, size: 24 })] });
+        const table = buildComponentTable(componentName, data[componentName], bloodTypes);
+        doc.addSection({
+          properties: {},
+          children: [sectionPara, table, new Paragraph({ text: "" })]
+        });
+      });
+
+      // Pack and download
+      const blob = await Packer.toBlob(doc);
+      const filename = `Daily_Inventory_${dateStrISO}.docx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
+
+    /* Hook up button WITH CONFIRMATION */
+    document.getElementById("dailyReportBtn").addEventListener("click", async function () {
+
+      // 🔔 Ask first
+      const ok = confirm("Generate and download today's Daily Inventory Report?");
+      if (!ok) return; // User cancelled
+
+      const btn = this;
+      btn.disabled = true;
+      btn.textContent = "Generating...";
+
+      try {
+        await generateDocxReport();
+      } catch (err) {
+        console.error(err);
+        alert("Error generating report (see console).");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Daily Report";
+      }
+    });
+  </script>
+</body>
+
+</html>
